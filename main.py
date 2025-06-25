@@ -1,99 +1,118 @@
-# Welcome to
-# __________         __    __  .__                               __
-# \______   \_____ _/  |__/  |_|  |   ____   ______ ____ _____  |  | __ ____
-#  |    |  _/\__  \\   __\   __\  | _/ __ \ /  ___//    \\__  \ |  |/ // __ \
-#  |    |   \ / __ \|  |  |  | |  |_\  ___/ \___ \|   |  \/ __ \|    <\  ___/
-#  |________/(______/__|  |__| |____/\_____>______>___|__(______/__|__\\_____>
-#
-# This file can be a nice home for your Battlesnake logic and helper functions.
-#
-# To get you started we've included code to prevent your Battlesnake from moving backwards.
-# For more info see docs.battlesnake.com
-
 import random
 import typing
+import copy
+from collections import deque
 
-
-# info is called when you create your Battlesnake on play.battlesnake.com
-# and controls your Battlesnake's appearance
-# TIP: If you open your Battlesnake URL in a browser you should see this data
+# === INFO ===
 def info() -> typing.Dict:
-    print("INFO")
-
     return {
         "apiversion": "1",
-        "author": "",  # TODO: Your Battlesnake Username
-        "color": "#888888",  # TODO: Choose color
-        "head": "default",  # TODO: Choose head
-        "tail": "default",  # TODO: Choose tail
+        "author": "Püppchens_Unsterbliche_Schlange",
+        "color": "#FF00FF",      # grelles Magenta
+        "head": "mystery",       # merkwürdiger Kopf
+        "tail": "coffee"         # merkwürdiger Schwanz
     }
 
-
-# start is called when your Battlesnake begins a game
+# === GAME START / END ===
 def start(game_state: typing.Dict):
-    print("GAME START")
+    print("LET THE CHAOS BEGIN")
 
-
-# end is called when your Battlesnake finishes a game
 def end(game_state: typing.Dict):
-    print("GAME OVER\n")
+    print("THE LAST SNAKE STANDS")
 
+# ---------------- Utillities ----------------
 
-# move is called on every turn and returns your next move
-# Valid moves are "up", "down", "left", or "right"
-# See https://docs.battlesnake.com/api/example-move for available data
+# Globale Bewegungs-Map
+delta = {"up": (0,1), "down": (0,-1), "left": (-1,0), "right": (1,0)}
+
+def simulate_state(state, moves):
+    # Wie gehabt: deepcopy + Kopf vor, Schwanz weg
+    new = copy.deepcopy(state)
+    # Bewege alle Schlangen
+    for s in new['board']['snakes']:
+        dx, dy = delta[moves[s['id']]]
+        head = s['body'][0]
+        s['body'].insert(0, {"x": head['x']+dx, "y": head['y']+dy})
+    # Fressen vs. schwänze kürzen
+    food = {(f['x'],f['y']) for f in new['board']['food']}
+    for s in new['board']['snakes']:
+        pos = (s['body'][0]['x'], s['body'][0]['y'])
+        if pos in food:
+            new['board']['food'] = [f for f in new['board']['food'] if (f['x'],f['y'])!=pos]
+        else:
+            s['body'].pop()
+    return new
+
+def flood_fill(head, occupied, w, h, limit=121):
+    from collections import deque
+    q = deque([head])
+    seen = {head}
+    area = 0
+    while q and area<limit:
+        x,y = q.popleft()
+        area += 1
+        for dx,dy in delta.values():
+            nx,ny = x+dx, y+dy
+            if 0<=nx<w and 0<=ny<h and (nx,ny) not in occupied and (nx,ny) not in seen:
+                seen.add((nx,ny)); q.append((nx,ny))
+    return area
+
+# Paranoid-Max-N-Search für 4-Schlangen-Free-For-All
+def paranoid_search(state, you_id, depth, alpha, beta):
+    board = state['board']
+    w,h = board['width'], board['height']
+    you = next(s for s in board['snakes'] if s['id']==you_id)
+    occupied = {(seg['x'],seg['y']) for s in board['snakes'] for seg in s['body']}
+    # Basis: depth 0 → schätze deine Freifläche
+    if depth==0:
+        return flood_fill((you['body'][0]['x'],you['body'][0]['y']), occupied, w, h)
+    # Maximizer (du)
+    best = -float('inf')
+    for move_you in delta:
+        # Safety-Check
+        x,y = you['body'][0]['x']+delta[move_you][0], you['body'][0]['y']+delta[move_you][1]
+        if (x,y) in occupied or not (0<=x<w and 0<=y<h): continue
+        # Gegner (paranoid: alle gegen dich) wählen worst-case
+        worst = float('inf')
+        # Simuliere alle kombinierten Züge der drei anderen (4^3 ≈ 64)
+        others = [s for s in board['snakes'] if s['id']!=you_id]
+        for m1 in delta:
+            for m2 in delta:
+                for m3 in delta:
+                    moves = {you_id: move_you,
+                             others[0]['id']: m1,
+                             others[1]['id']: m2,
+                             others[2]['id']: m3}
+                    nxt = simulate_state(state, moves)
+                    val = paranoid_search(nxt, you_id, depth-1, alpha, beta)
+                    worst = min(worst, val)
+                    # Beta-Cut
+                    if worst <= alpha:
+                        break
+                if worst <= alpha: break
+            if worst <= alpha: break
+        best = max(best, worst)
+        alpha = max(alpha, best)
+        if best >= beta:
+            break
+    return best
+
+# === MOVE-LOGIK ===
 def move(game_state: typing.Dict) -> typing.Dict:
+    you_id = game_state['you']['id']
+    # Free-Fall Höhepunkt: 3-Ply deep
+    best_move, best_val = None, -float('inf')
+    alpha, beta = -float('inf'), float('inf')
+    for m in delta:
+        val = paranoid_search(game_state, you_id, depth=3, alpha=alpha, beta=beta)
+        if val > best_val:
+            best_val, best_move = val, m
+            alpha = max(alpha, val)
+    if not best_move:
+        best_move = random.choice(list(delta))
+    return {"move": best_move}
 
-    is_move_safe = {"up": True, "down": True, "left": True, "right": True}
-
-    # We've included code to prevent your Battlesnake from moving backwards
-    my_head = game_state["you"]["body"][0]  # Coordinates of your head
-    my_neck = game_state["you"]["body"][1]  # Coordinates of your "neck"
-
-    if my_neck["x"] < my_head["x"]:  # Neck is left of head, don't move left
-        is_move_safe["left"] = False
-
-    elif my_neck["x"] > my_head["x"]:  # Neck is right of head, don't move right
-        is_move_safe["right"] = False
-
-    elif my_neck["y"] < my_head["y"]:  # Neck is below head, don't move down
-        is_move_safe["down"] = False
-
-    elif my_neck["y"] > my_head["y"]:  # Neck is above head, don't move up
-        is_move_safe["up"] = False
-
-    # TODO: Step 1 - Prevent your Battlesnake from moving out of bounds
-    # board_width = game_state['board']['width']
-    # board_height = game_state['board']['height']
-
-    # TODO: Step 2 - Prevent your Battlesnake from colliding with itself
-    # my_body = game_state['you']['body']
-
-    # TODO: Step 3 - Prevent your Battlesnake from colliding with other Battlesnakes
-    # opponents = game_state['board']['snakes']
-
-    # Are there any safe moves left?
-    safe_moves = []
-    for move, isSafe in is_move_safe.items():
-        if isSafe:
-            safe_moves.append(move)
-
-    if len(safe_moves) == 0:
-        print(f"MOVE {game_state['turn']}: No safe moves detected! Moving down")
-        return {"move": "down"}
-
-    # Choose a random move from the safe ones
-    next_move = random.choice(safe_moves)
-
-    # TODO: Step 4 - Move towards food instead of random, to regain health and survive longer
-    # food = game_state['board']['food']
-
-    print(f"MOVE {game_state['turn']}: {next_move}")
-    return {"move": next_move}
-
-
-# Start server when `python main.py` is run
-if __name__ == "__main__":
+# === SERVER-START ===
+if __name__=="__main__":
     from server import run_server
-
-    run_server({"info": info, "start": start, "move": move, "end": end})
+    run_server({"info":info, "start":start, "move":move, "end":end})
